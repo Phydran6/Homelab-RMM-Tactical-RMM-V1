@@ -1,0 +1,57 @@
+#!/bin/bash
+# PF | v20260118153633
+# Proxmox Debian Disk Resize
+
+export PATH="/sbin:/usr/sbin:$PATH"
+
+# Debug nur bei Fehler
+debug_info() {
+    echo "=== DEBUG ==="
+    echo "User: $(whoami) | EUID: $EUID | PATH: $PATH"
+    echo "Debian: $(cat /etc/debian_version 2>/dev/null)"
+    echo "parted: $(which parted 2>/dev/null || echo 'FEHLT')"
+    lsblk
+}
+trap 'echo "FEHLER in Zeile $LINENO"; debug_info' ERR
+
+# Root-Check
+[ "$EUID" -ne 0 ] && echo "Bitte als root ausführen" && exit 1
+
+# Root-Partition ermitteln
+ROOT_PART=$(findmnt -n -o SOURCE /)
+ROOT_NUM=$(echo "$ROOT_PART" | grep -o '[0-9]*$')
+START=$(fdisk -l /dev/sda | grep "^${ROOT_PART}" | awk '{print ($2=="*") ? $3 : $2}')
+
+echo "=== Proxmox Debian Disk Resize ==="
+echo "Root: $ROOT_PART (Start: $START)"
+lsblk /dev/sda
+
+# 1. Swap aus
+swapoff -a 2>/dev/null || true
+sed -i '/swap/d' /etc/fstab
+[ -f /swapfile ] && rm -f /swapfile
+
+# 2. Alte Partitionen löschen (5, 3, 2 falls vorhanden)
+for p in 5 3 2; do
+    [ -b "/dev/sda$p" ] && [ "$p" -gt "$ROOT_NUM" ] && yes | parted /dev/sda rm $p 2>/dev/null || true
+done
+
+# 3. Root-Partition erweitern (fdisk)
+echo -e "d\nn\np\n${ROOT_NUM}\n${START}\n\na\nw" | fdisk /dev/sda >/dev/null 2>&1 || true
+partprobe /dev/sda 2>/dev/null || true
+
+# 4. Dateisystem erweitern
+resize2fs "$ROOT_PART"
+
+# 5. Swap-Datei anlegen
+dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+chmod 600 /swapfile
+mkswap /swapfile >/dev/null
+swapon /swapfile
+grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+echo ""
+echo "=== FERTIG ==="
+lsblk /dev/sda
+df -h /
+free -h
