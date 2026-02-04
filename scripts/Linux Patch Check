@@ -1,0 +1,357 @@
+#!/bin/bash
+# ==============================================================================
+# apt-smart-update.sh
+# Intelligentes Update-System mit interaktivem Timeout-Menue
+# ==============================================================================
+# Autor:    Philipp Fischer <it@phytech.de>
+# Version:  2026.02.04.20.03.00
+# System:   Debian/Ubuntu (apt-basiert)
+# ==============================================================================
+#
+# FUNKTIONSWEISE:
+#   - Laeuft vollautomatisch durch wenn keine Eingabe erfolgt
+#   - Jede Option hat 3 Sekunden Timeout, dann gilt der Default
+#   - Unkritische Updates werden automatisch installiert
+#   - Systemkritische Updates nur nach expliziter Bestaetigung
+#
+# KATEGORISIERUNG:
+#   AUTOMATISCH  - Pakete die das System nicht destabilisieren koennen
+#   MANUELL      - Kernel, Bootloader, Init, Core-Libs, Paketmanager
+#
+# ==============================================================================
+
+set -euo pipefail
+
+# ------------------------------------------------------------------------------
+# Konfiguration
+# ------------------------------------------------------------------------------
+TIMEOUT=3
+LOGFILE="/var/log/apt-smart-update.log"
+
+# Kritische Pakete Pattern
+KRITISCH_PATTERN="^(linux-image|linux-headers|linux-firmware|linux-libc-dev"
+KRITISCH_PATTERN+="|grub|shim|efi|initramfs|mokutil"
+KRITISCH_PATTERN+="|systemd|udev|libudev|libsystemd|dbus-daemon"
+KRITISCH_PATTERN+="|libc6|libc-bin|libc-dev|libgcc|libstdc\+\+|ld-linux"
+KRITISCH_PATTERN+="|libpam|libnss|libcrypt|libselinux"
+KRITISCH_PATTERN+="|apt|dpkg|libapt|apt-utils"
+KRITISCH_PATTERN+="|base-files|bash|coreutils|util-linux|login|passwd"
+KRITISCH_PATTERN+="|glibc|eglibc)(-|$)"
+
+# Farben
+if [[ -t 1 ]]; then
+    ROT='\033[0;31m'
+    GRUEN='\033[0;32m'
+    GELB='\033[0;33m'
+    BLAU='\033[0;34m'
+    GRAU='\033[0;90m'
+    RESET='\033[0m'
+    FETT='\033[1m'
+else
+    ROT='' GRUEN='' GELB='' BLAU='' GRAU='' RESET='' FETT=''
+fi
+
+# Optionen (Defaults)
+CHECK_ONLY=false
+FORCE_KRITISCH=false
+QUIET=false
+CLEANUP=true
+
+# ------------------------------------------------------------------------------
+# Funktionen
+# ------------------------------------------------------------------------------
+log() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    echo "$msg" >> "$LOGFILE" 2>/dev/null || true
+}
+
+# Timeout-Prompt: fragt mit Countdown, bei Timeout gilt Default
+# Usage: timeout_prompt "Frage" "default" "variable_name"
+#   default: j oder n
+#   setzt variable auf true (j) oder false (n)
+timeout_prompt() {
+    local frage="$1"
+    local default="$2"
+    local varname="$3"
+    local eingabe=""
+    local default_text default_val
+    
+    if [[ "$default" == "j" ]]; then
+        default_text="J/n"
+        default_val=true
+    else
+        default_text="j/N"
+        default_val=false
+    fi
+    
+    # Prompt mit Countdown anzeigen
+    echo -ne "${frage} [${default_text}] ${GRAU}(${TIMEOUT}s)${RESET} "
+    
+    if read -t $TIMEOUT -n 1 eingabe 2>/dev/null; then
+        echo ""  # Newline nach Eingabe
+        case "$eingabe" in
+            [JjYy]) printf -v "$varname" "true" ;;
+            [Nn])   printf -v "$varname" "false" ;;
+            *)      printf -v "$varname" "$default_val" ;;
+        esac
+        echo -e "  ${GRUEN}→${RESET} $([ "${!varname}" = "true" ] && echo "Ja" || echo "Nein")"
+    else
+        # Timeout - Default verwenden
+        printf -v "$varname" "$default_val"
+        echo -e "${GRAU}timeout${RESET}"
+        echo -e "  ${BLAU}→${RESET} Default: $([ "${!varname}" = "true" ] && echo "Ja" || echo "Nein")"
+    fi
+    echo ""
+}
+
+ist_kritisch() {
+    echo "$1" | grep -qiE "$KRITISCH_PATTERN"
+}
+
+# ------------------------------------------------------------------------------
+# Start
+# ------------------------------------------------------------------------------
+clear 2>/dev/null || true
+
+echo ""
+echo -e "${FETT}========================================${RESET}"
+echo -e "${FETT}      APT SMART UPDATE${RESET}"
+echo -e "${FETT}========================================${RESET}"
+echo ""
+echo -e "${GRAU}Timeout: ${TIMEOUT}s pro Frage - keine Eingabe = Default${RESET}"
+echo ""
+
+# ------------------------------------------------------------------------------
+# Root-Check
+# ------------------------------------------------------------------------------
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${ROT}FEHLER: Root-Rechte benoetigt${RESET}"
+    echo "Starte mit: sudo $0"
+    exit 1
+fi
+
+# ------------------------------------------------------------------------------
+# Interaktives Menue mit Timeouts
+# ------------------------------------------------------------------------------
+echo -e "${FETT}--- OPTIONEN ---${RESET}"
+echo ""
+
+timeout_prompt "Nur pruefen ohne Installation?" "n" "CHECK_ONLY"
+timeout_prompt "Ausfuehrliche Ausgabe?" "n" "VERBOSE"
+QUIET=true
+$VERBOSE && QUIET=false
+
+timeout_prompt "Cache aufraeumen nach Update?" "j" "CLEANUP"
+
+# ------------------------------------------------------------------------------
+# Paketlisten aktualisieren
+# ------------------------------------------------------------------------------
+echo -e "${FETT}--- PAKETLISTEN ---${RESET}"
+echo ""
+echo -n "Aktualisiere Paketlisten... "
+
+if apt-get update -qq 2>/dev/null; then
+    echo -e "${GRUEN}OK${RESET}"
+else
+    echo -e "${ROT}FEHLER${RESET}"
+    exit 1
+fi
+echo ""
+
+# ------------------------------------------------------------------------------
+# Updates ermitteln
+# ------------------------------------------------------------------------------
+UPDATES=$(apt list --upgradable 2>/dev/null | grep "/" | sort)
+
+if [[ -z "$UPDATES" ]]; then
+    echo -e "${GRUEN}System ist aktuell - keine Updates verfuegbar${RESET}"
+    echo ""
+    log "Keine Updates verfuegbar"
+    exit 0
+fi
+
+# Arrays
+declare -a AUTO=()
+declare -a KRITISCH=()
+declare -a SECURITY=()
+
+while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    pkg=$(echo "$line" | cut -d'/' -f1)
+    
+    # Security erkennen
+    if echo "$line" | grep -qE "(security|/stable-security)"; then
+        SECURITY+=("$pkg")
+    fi
+    
+    # Kategorisieren
+    if ist_kritisch "$pkg"; then
+        KRITISCH+=("$pkg")
+    else
+        AUTO+=("$pkg")
+    fi
+done <<< "$UPDATES"
+
+# ------------------------------------------------------------------------------
+# Status anzeigen
+# ------------------------------------------------------------------------------
+TOTAL=$((${#AUTO[@]} + ${#KRITISCH[@]}))
+
+echo -e "${FETT}--- UPDATES GEFUNDEN ---${RESET}"
+echo ""
+echo -e "Gesamt:        ${FETT}$TOTAL${RESET}"
+echo -e "Automatisch:   ${GRUEN}${#AUTO[@]}${RESET} (unbedenklich)"
+echo -e "Manuell:       ${GELB}${#KRITISCH[@]}${RESET} (systemkritisch)"
+[[ ${#SECURITY[@]} -gt 0 ]] && echo -e "Security:      ${ROT}${#SECURITY[@]}${RESET}"
+echo ""
+
+# Details wenn verbose
+if $VERBOSE; then
+    if [[ ${#AUTO[@]} -gt 0 ]]; then
+        echo -e "${GRUEN}Automatisch:${RESET}"
+        printf '  %s\n' "${AUTO[@]}"
+        echo ""
+    fi
+    if [[ ${#KRITISCH[@]} -gt 0 ]]; then
+        echo -e "${GELB}Systemkritisch:${RESET}"
+        for pkg in "${KRITISCH[@]}"; do
+            marker=""
+            for sec in "${SECURITY[@]}"; do
+                [[ "$pkg" == "$sec" ]] && marker=" ${ROT}[SEC]${RESET}"
+            done
+            echo -e "  $pkg$marker"
+        done
+        echo ""
+    fi
+fi
+
+# ------------------------------------------------------------------------------
+# Check-Only Mode?
+# ------------------------------------------------------------------------------
+if $CHECK_ONLY; then
+    echo -e "${BLAU}Nur-Pruefen-Modus aktiv - keine Installation${RESET}"
+    echo ""
+    log "Check-only: $TOTAL Updates gefunden"
+    exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# Automatische Updates installieren
+# ------------------------------------------------------------------------------
+if [[ ${#AUTO[@]} -gt 0 ]]; then
+    echo -e "${FETT}--- AUTOMATISCHE INSTALLATION ---${RESET}"
+    echo ""
+    echo -e "Installiere ${GRUEN}${#AUTO[@]}${RESET} unkritische Pakete..."
+    echo ""
+    
+    if $VERBOSE; then
+        apt-get install -y "${AUTO[@]}" 2>&1 | grep -vE "^(Reading|Building)"
+    else
+        apt-get install -y "${AUTO[@]}" >/dev/null 2>&1
+    fi
+    
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GRUEN}OK${RESET} - Unkritische Updates installiert"
+        log "Installiert: ${AUTO[*]}"
+    else
+        echo -e "${GELB}WARNUNG${RESET} - Einige Pakete fehlgeschlagen"
+        log "Fehler bei Installation"
+    fi
+    echo ""
+fi
+
+# ------------------------------------------------------------------------------
+# Kritische Updates
+# ------------------------------------------------------------------------------
+if [[ ${#KRITISCH[@]} -gt 0 ]]; then
+    echo -e "${FETT}--- SYSTEMKRITISCHE UPDATES ---${RESET}"
+    echo ""
+    echo -e "${GELB}Folgende Pakete wurden NICHT installiert:${RESET}"
+    echo ""
+    for pkg in "${KRITISCH[@]}"; do
+        echo "  • $pkg"
+    done
+    echo ""
+    echo -e "${GRAU}Grund: Reboot erforderlich oder System-Risiko${RESET}"
+    echo ""
+    
+    # Frage ob kritische installiert werden sollen
+    timeout_prompt "Kritische Pakete JETZT installieren?" "n" "FORCE_KRITISCH"
+    
+    if $FORCE_KRITISCH; then
+        echo -e "${ROT}WARNUNG: Installation systemkritischer Pakete!${RESET}"
+        echo ""
+        
+        # Sicherheitsabfrage mit längerem Timeout
+        echo -ne "Wirklich fortfahren? [j/N] ${GRAU}(5s)${RESET} "
+        
+        if read -t 5 -n 1 confirm 2>/dev/null; then
+            echo ""
+            if [[ "$confirm" =~ ^[JjYy]$ ]]; then
+                echo ""
+                echo "Installiere kritische Pakete..."
+                if apt-get install -y "${KRITISCH[@]}"; then
+                    echo ""
+                    echo -e "${GRUEN}OK${RESET} - Kritische Updates installiert"
+                    echo -e "${ROT}${FETT}*** NEUSTART EMPFOHLEN ***${RESET}"
+                    log "Kritisch installiert: ${KRITISCH[*]}"
+                else
+                    echo -e "${ROT}FEHLER${RESET} bei Installation"
+                fi
+            else
+                echo -e "${BLAU}Abgebrochen${RESET}"
+            fi
+        else
+            echo -e "${GRAU}timeout${RESET}"
+            echo -e "${BLAU}Abgebrochen (Sicherheits-Timeout)${RESET}"
+        fi
+    else
+        echo "Manuell installieren mit:"
+        echo -e "  ${FETT}sudo apt install ${KRITISCH[*]}${RESET}"
+    fi
+    echo ""
+fi
+
+# ------------------------------------------------------------------------------
+# Cleanup
+# ------------------------------------------------------------------------------
+if $CLEANUP; then
+    echo -e "${FETT}--- AUFRAEUMEN ---${RESET}"
+    echo ""
+    echo -n "Cache bereinigen... "
+    apt-get autoclean -qq 2>/dev/null
+    echo -e "${GRUEN}OK${RESET}"
+    
+    echo -n "Ungenutzte Pakete entfernen... "
+    apt-get autoremove -qq -y 2>/dev/null || true
+    echo -e "${GRUEN}OK${RESET}"
+    echo ""
+fi
+
+# ------------------------------------------------------------------------------
+# Zusammenfassung
+# ------------------------------------------------------------------------------
+echo -e "${FETT}========================================${RESET}"
+echo -e "${FETT}         FERTIG${RESET}"
+echo -e "${FETT}========================================${RESET}"
+echo ""
+echo -e "Installiert:    ${GRUEN}${#AUTO[@]}${RESET}"
+echo -e "Uebersprungen:  ${GELB}${#KRITISCH[@]}${RESET}"
+echo ""
+
+# Reboot-Hinweis
+if [[ -f /var/run/reboot-required ]]; then
+    echo -e "${ROT}${FETT}*** NEUSTART ERFORDERLICH ***${RESET}"
+    echo ""
+    
+    timeout_prompt "Jetzt neustarten?" "n" "DO_REBOOT"
+    
+    if $DO_REBOOT; then
+        echo "System wird neugestartet..."
+        sleep 2
+        reboot
+    fi
+fi
+
+log "Update abgeschlossen"
+echo -e "${GRUEN}Done.${RESET}"
