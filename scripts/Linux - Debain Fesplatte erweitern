@@ -1,6 +1,31 @@
 #!/bin/bash
-# PF | v20260118153633
+# ==============================================================================
 # Proxmox Debian Disk Resize
+# ==============================================================================
+#
+# Beschreibung:
+#   Erweitert automatisch die Root-Partition einer Debian VM in Proxmox,
+#   nachdem die virtuelle Festplatte vergrößert wurde. Entfernt alte Swap-
+#   Partitionen und erstellt eine Swap-Datei.
+#
+# Voraussetzungen:
+#   - Proxmox VM mit Debian
+#   - Virtuelle Festplatte wurde bereits in Proxmox vergrößert
+#   - Root-Rechte erforderlich
+#
+# Verwendung:
+#   sudo ./resize-disk.sh
+#
+# Ablauf:
+#   1. Deaktiviert Swap und entfernt alte Swap-Einträge
+#   2. Löscht überflüssige Partitionen (Extended, Swap)
+#   3. Erweitert Root-Partition auf maximale Größe
+#   4. Erweitert Dateisystem (ext4)
+#   5. Erstellt 2GB Swap-Datei
+#
+# Autor:   PF
+# Version: 20260118153633
+# ==============================================================================
 
 export PATH="/sbin:/usr/sbin:$PATH"
 
