@@ -1,33 +1,19 @@
-# Tactical RMM Update (Docker) - v1.3.1 → v1.4.0
+# Tactical RMM Update (Docker)
 
-> **Letzte Aktualisierung:** Februar 2026  
-> **Quellversion:** v1.3.1  
-> **Zielversion:** v1.4.0  
-> **Getestet:** ✅ Erfolgreich
+> **Anwendungsfall:** Update einer Docker-basierten Tactical RMM Installation mit `VERSION=latest` in der .env Datei.
 
 ## Übersicht
 
 | Komponente | Details |
 |------------|---------|
-| RMM-VM | Debian mit Docker, User `rmm` (sudo), Verzeichnis `~/trmm` |
-| Aktuelle Version | v1.3.1 |
-| Zielversion | v1.4.0 |
-| Agent-Version (neu) | 2.10.0 |
+| RMM-VM | Debian/Ubuntu mit Docker, Verzeichnis `~/trmm` |
+| .env Einstellung | `VERSION=latest` |
 
 ## Voraussetzungen
 
-- [x] SSH-Zugang zur RMM-VM
-- [x] Proxmox Snapshot erstellt (Rollback-Möglichkeit)
-- [x] SSL-Zertifikat aktuell (siehe separate Anleitung)
-
----
-
-## Wichtige Änderungen in v1.4.0
-
-- **3-4× schnelleres Dashboard-Loading**
-- Neuer Windows Registry Editor
-- Docker-Verbesserungen für Session/CSRF Domain Handling
-- Agent-Version 2.10.0 (kann Antivirus-Fehlalarme auslösen!)
+- SSH-Zugang zur RMM-VM
+- VM-Snapshot erstellt (Rollback-Möglichkeit)
+- SSL-Zertifikat aktuell (siehe separate Anleitung)
 
 ---
 
@@ -35,9 +21,9 @@
 
 > ⚠️ **WICHTIG:** Vor dem Update unbedingt durchführen!
 
-Die neue Agent-Version 2.10.0 kann bei einigen Antivirus-Programmen Fehlalarme auslösen. Daher erst manuell testen.
+Neue Agent-Versionen können bei einigen Antivirus-Programmen Fehlalarme auslösen. Daher erst manuell testen.
 
-1. Im Browser `rmm.phytech.de` öffnen
+1. Im Browser Tactical RMM Web-UI öffnen
 2. **Settings** → **Global Settings**
 3. **"Enable agent automatic self update"** → **Deaktivieren**
 4. Speichern
@@ -101,8 +87,8 @@ sudo docker system prune -a
 
 ### 4.1 Web-UI prüfen
 
-1. Im Browser `rmm.phytech.de` öffnen
-2. Oben links sollte **v1.4.0** stehen
+1. Im Browser Tactical RMM Web-UI öffnen
+2. Oben links sollte die neue Version stehen
 
 ### 4.2 Container-Status prüfen
 
@@ -116,14 +102,14 @@ Alle Container sollten `Up` oder `running` zeigen.
 
 ## Schritt 5: Agents testen (optional)
 
-> 💡 **Hinweis:** Falls die Agents bereits auf Version 2.10.0 sind, ist dieser Schritt nicht nötig. Prüfe in der Web-UI unter **Agents** die Agent-Version.
+> 💡 **Hinweis:** Falls die Agents bereits auf der aktuellen Version sind, ist dieser Schritt nicht nötig. Prüfe in der Web-UI unter **Agents** die Agent-Version.
 
 Falls Agents noch auf alter Version:
 
 1. In der Web-UI: **Agents** → 2-3 Test-Agents auswählen
 2. **Update Agents** klicken
 3. Ein paar Minuten warten
-4. Prüfen ob Agent-Version **2.10.0** zeigt
+4. Prüfen ob neue Agent-Version angezeigt wird
 5. Prüfen ob Antivirus Alarm schlägt
 
 ### Bei Erfolg:
@@ -136,7 +122,7 @@ Falls Agents noch auf alter Version:
 
 ```bash
 # ============================================
-# TRMM Update v1.3.1 → v1.4.0
+# TRMM Update
 # ============================================
 
 # 1. In Web-UI: Automatische Agent-Updates DEAKTIVIEREN!
@@ -153,7 +139,7 @@ sudo docker compose ps
 # 4. Alte Images aufräumen
 sudo docker image prune -a
 
-# 5. In Web-UI: Version prüfen (sollte v1.4.0 zeigen)
+# 5. In Web-UI: Version prüfen
 # 6. In Web-UI: Agent-Versionen prüfen (evtl. schon aktuell)
 # 7. In Web-UI: Automatische Agent-Updates wieder AKTIVIEREN
 ```
@@ -188,20 +174,20 @@ sudo docker compose logs tactical-backend
 3. Antivirus-Ausnahme für Tactical Agent hinzufügen
 4. Antivirus wieder aktivieren
 
-### Rollback auf v1.3.1
+### Rollback
 
-Falls alles schiefgeht → Proxmox Snapshot zurückspielen.
+Falls alles schiefgeht → VM-Snapshot zurückspielen.
 
 ---
 
-## Nach dem Update
+## Checkliste nach dem Update
 
-- [x] Version v1.4.0 in Web-UI bestätigt
-- [x] Alle Container laufen
-- [x] Agent-Versionen geprüft (waren bereits aktuell)
-- [x] Automatische Agent-Updates wieder aktiviert
-- [ ] Proxmox Snapshot kann gelöscht werden (oder behalten für Sicherheit)
-- [x] Alte Docker Images aufgeräumt
+- [ ] Neue Version in Web-UI bestätigt
+- [ ] Alle Container laufen
+- [ ] Agent-Versionen geprüft
+- [ ] Automatische Agent-Updates wieder aktiviert
+- [ ] VM-Snapshot kann gelöscht werden (oder behalten)
+- [ ] Alte Docker Images aufgeräumt
 
 ---
 
@@ -209,5 +195,5 @@ Falls alles schiefgeht → Proxmox Snapshot zurückspielen.
 
 - [Tactical RMM Dokumentation](https://docs.tacticalrmm.com/)
 - [Docker Update Anleitung (offiziell)](https://docs.tacticalrmm.com/update_docker/)
-- [Release Notes v1.4.0](https://github.com/amidaware/tacticalrmm/releases/tag/v1.4.0)
+- [GitHub Releases](https://github.com/amidaware/tacticalrmm/releases)
 - [GitHub Issues](https://github.com/amidaware/tacticalrmm/issues)
